@@ -92,7 +92,7 @@ public class HomeFragment extends Fragment {
 
         ((MainActivity) getActivity()).buildFitnessClient();
         subscribeDailySteps();
-        subscribeDailyDistance();
+        subscribeDailyDistance(getActivity());
 
         checkSensorsPermission(getActivity());
         checkAccessFineLocationPermission(getActivity());

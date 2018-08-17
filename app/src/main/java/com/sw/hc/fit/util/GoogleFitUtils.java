@@ -2,6 +2,7 @@ package com.sw.hc.fit.util;
 
 import android.Manifest;
 import android.app.Activity;
+import android.content.Context;
 import android.content.pm.PackageManager;
 import android.os.AsyncTask;
 import android.os.Bundle;
@@ -12,6 +13,7 @@ import android.support.v4.app.FragmentManager;
 import android.util.Log;
 import android.widget.Toast;
 
+import com.google.android.gms.auth.api.signin.GoogleSignIn;
 import com.google.android.gms.common.ConnectionResult;
 import com.google.android.gms.common.Scopes;
 import com.google.android.gms.common.api.GoogleApiClient;
@@ -21,20 +23,31 @@ import com.google.android.gms.common.api.Scope;
 import com.google.android.gms.common.api.Status;
 import com.google.android.gms.fitness.Fitness;
 import com.google.android.gms.fitness.FitnessStatusCodes;
+import com.google.android.gms.fitness.data.Bucket;
 import com.google.android.gms.fitness.data.DataPoint;
 import com.google.android.gms.fitness.data.DataSet;
 import com.google.android.gms.fitness.data.DataType;
 import com.google.android.gms.fitness.data.Field;
+import com.google.android.gms.fitness.request.DataReadRequest;
 import com.google.android.gms.fitness.result.DailyTotalResult;
+import com.google.android.gms.fitness.result.DataReadResponse;
+import com.google.android.gms.fitness.result.DataReadResult;
+import com.google.android.gms.tasks.OnFailureListener;
+import com.google.android.gms.tasks.OnSuccessListener;
 import com.sw.hc.fit.App;
 import com.sw.hc.fit.activities.MainActivity;
 import com.sw.hc.fit.fragments.home.HomeFragment;
 
+import java.text.DateFormat;
+import java.util.Calendar;
+import java.util.Date;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 import static com.sw.hc.fit.activities.MainActivity.REQUEST_PERMISSIONS_REQUEST_CODE;
 import static com.sw.hc.fit.activities.MainActivity.client;
+import static java.text.DateFormat.getDateInstance;
+import static java.text.DateFormat.getTimeInstance;
 
 /**
  * Created by fcampos on 17/05/2018.
@@ -223,11 +236,37 @@ public class GoogleFitUtils {
     public static class VerifyDataTaskDistance extends AsyncTask<GoogleApiClient, Void, Void> {
 
         float total = 0;
+        Context context;
+
+        VerifyDataTaskDistance(Context context) {
+            this.context = context;
+        }
 
         protected Void doInBackground(GoogleApiClient... clients) {
 
-            PendingResult<DailyTotalResult> result = Fitness.HistoryApi.readDailyTotal(clients[0], DataType.TYPE_DISTANCE_DELTA);
-            DailyTotalResult totalResult = result.await(30, TimeUnit.SECONDS);
+            PendingResult<DataReadResult> result = Fitness.HistoryApi.readData(clients[0], queryFitnessData());
+
+            DataReadResult totalResult = result.await(30, TimeUnit.SECONDS);
+
+            List<Bucket> buckets = totalResult.getBuckets();
+            Log.e(LOG_TAG, "Point value  size=" + buckets.size());
+            DateFormat dateFormat = getTimeInstance();
+
+            for (Bucket bucket : buckets) {
+                List<DataSet> dataSets = bucket.getDataSets();
+                for (DataSet dataSet : dataSets) {
+                    for (DataPoint dp : dataSet.getDataPoints()) {
+                        Log.i(LOG_TAG, "Data point:");
+                        Log.i(LOG_TAG, "\tType: " + dp.getDataType().getName());
+                        Log.i(LOG_TAG, "\tStart: " + dateFormat.format(dp.getStartTime(TimeUnit.MILLISECONDS)));
+                        Log.i(LOG_TAG, "\tEnd: " + dateFormat.format(dp.getEndTime(TimeUnit.MILLISECONDS)));
+                        for (Field field : dp.getDataType().getFields()) {
+                            Log.i(LOG_TAG, "\tField: " + field.getName() + " Value: " + dp.getValue(field));
+                        }
+                    }
+                }
+            }
+            /*DailyTotalResult totalResult = result.await(30, TimeUnit.SECONDS);
             if (totalResult.getStatus().isSuccess()) {
                 DataSet totalSet = totalResult.getTotal();
                 if (totalSet != null) {
@@ -244,7 +283,7 @@ public class GoogleFitUtils {
                 Log.e(LOG_TAG, "There was a problem getting the distance count");
             }
 
-            Log.i(LOG_TAG, "Total distance: " + total);
+            Log.i(LOG_TAG, "Total distance: " + total);*/
 
             return null;
         }
@@ -257,6 +296,43 @@ public class GoogleFitUtils {
 
         }
 
+    }
+
+
+    /**
+     * Returns a {@link DataReadRequest} for all step count changes in the past week.
+     */
+    public static DataReadRequest queryFitnessData() {
+        // [START build_read_data_request]
+        // Setting a start and end date using a range of 1 week before this moment.
+        Calendar cal = Calendar.getInstance();
+        Date now = new Date();
+        cal.setTime(now);
+        long endTime = cal.getTimeInMillis();
+        cal.add(Calendar.WEEK_OF_YEAR, -1);
+        long startTime = cal.getTimeInMillis();
+
+        java.text.DateFormat dateFormat = getDateInstance();
+        Log.i(LOG_TAG, "Range Start: " + dateFormat.format(startTime));
+        Log.i(LOG_TAG, "Range End: " + dateFormat.format(endTime));
+
+        DataReadRequest readRequest =
+                new DataReadRequest.Builder()
+                        // The data request can specify multiple data types to return, effectively
+                        // combining multiple data queries into one call.
+                        // In this example, it's very unlikely that the request is for several hundred
+                        // datapoints each consisting of a few steps and a timestamp.  The more likely
+                        // scenario is wanting to see how many steps were walked per day, for 7 days.
+                        .aggregate(DataType.TYPE_DISTANCE_DELTA, DataType.AGGREGATE_DISTANCE_DELTA)
+                        // Analogous to a "Group By" in SQL, defines how data should be aggregated.
+                        // bucketByTime allows for a time span, whereas bucketBySession would allow
+                        // bucketing by "sessions", which would need to be defined in code.
+                        .bucketByTime(1, TimeUnit.DAYS)
+                        .setTimeRange(startTime, endTime, TimeUnit.MILLISECONDS)
+                        .build();
+        // [END build_read_data_request]
+
+        return readRequest;
     }
 
 
@@ -302,13 +378,13 @@ public class GoogleFitUtils {
     }
 
 
-    private static void readDistanceToday() {
-        new VerifyDataTaskDistance().execute(client);
+    private static void readDistanceToday(Context context) {
+        new VerifyDataTaskDistance(context).execute(client);
     }
 
 
     // ----------- Google Fit Daily DISTANCE -----------
-    public static void subscribeDailyDistance() {
+    public static void subscribeDailyDistance(Context context) {
 
 
         Log.d(LOG_TAG, "subscribeDailyDistance was called");
@@ -333,7 +409,7 @@ public class GoogleFitUtils {
                                 }
 
                                 // :)
-                                readDistanceToday();
+                                readDistanceToday(context);
 
                             } else {
                                 Log.e(LOG_TAG, "There was a problem subscribing");
